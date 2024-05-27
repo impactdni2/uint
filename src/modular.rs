@@ -202,9 +202,11 @@ mod tests {
     fn test_commutative() {
         const_for!(BITS in SIZES {
             const LIMBS: usize = nlimbs(BITS);
+            const LIMBS_X2: usize = nlimbs(BITS * 2);
             type U = Uint<BITS, LIMBS>;
             proptest!(|(a: U, b: U, m: U)| {
                 assert_eq!(a.mul_mod(b, m), b.mul_mod(a, m));
+                assert_eq!(a.mul_mod_na::<LIMBS_X2>(b, m), b.mul_mod_na::<LIMBS_X2>(a, m));
             });
         });
     }
@@ -213,9 +215,11 @@ mod tests {
     fn test_associative() {
         const_for!(BITS in SIZES {
             const LIMBS: usize = nlimbs(BITS);
+            const LIMBS_X2: usize = nlimbs(BITS * 2);
             type U = Uint<BITS, LIMBS>;
             proptest!(|(a: U, b: U, c: U, m: U)| {
                 assert_eq!(a.mul_mod(b.mul_mod(c, m), m), a.mul_mod(b, m).mul_mod(c, m));
+                assert_eq!(a.mul_mod_na::<LIMBS_X2>(b.mul_mod_na::<LIMBS_X2>(c, m), m), a.mul_mod_na::<LIMBS_X2>(b, m).mul_mod_na::<LIMBS_X2>(c, m));
             });
         });
     }
@@ -224,9 +228,11 @@ mod tests {
     fn test_distributive() {
         const_for!(BITS in SIZES {
             const LIMBS: usize = nlimbs(BITS);
+            const LIMBS_X2: usize = nlimbs(BITS * 2);
             type U = Uint<BITS, LIMBS>;
             proptest!(|(a: U, b: U, c: U, m: U)| {
                 assert_eq!(a.mul_mod(b.add_mod(c, m), m), a.mul_mod(b, m).add_mod(a.mul_mod(c, m), m));
+                assert_eq!(a.mul_mod_na::<LIMBS_X2>(b.add_mod(c, m), m), a.mul_mod_na::<LIMBS_X2>(b, m).add_mod(a.mul_mod_na::<LIMBS_X2>(c, m), m));
             });
         });
     }
@@ -246,10 +252,13 @@ mod tests {
     fn test_mul_identity() {
         const_for!(BITS in NON_ZERO {
             const LIMBS: usize = nlimbs(BITS);
+            const LIMBS_X2: usize = nlimbs(BITS * 2);
             type U = Uint<BITS, LIMBS>;
             proptest!(|(value: U, m: U)| {
                 assert_eq!(value.mul_mod(U::from(0), m), U::ZERO);
                 assert_eq!(value.mul_mod(U::from(1), m), value.reduce_mod(m));
+                assert_eq!(value.mul_mod_na::<LIMBS_X2>(U::from(0), m), U::ZERO);
+                assert_eq!(value.mul_mod_na::<LIMBS_X2>(U::from(1), m), value.reduce_mod(m));
             });
         });
     }
@@ -270,6 +279,7 @@ mod tests {
     fn test_pow_rules() {
         const_for!(BITS in NON_ZERO {
             const LIMBS: usize = nlimbs(BITS);
+            const LIMBS_X2: usize = nlimbs(BITS * 2);
             type U = Uint<BITS, LIMBS>;
             // TODO: Increase cases when perf is better.
             let mut config = Config::default();
@@ -279,6 +289,7 @@ mod tests {
                 // TODO: a^(b+c) = a^b * a^c. Which requires carmichael fn.
                 // TODO: (a^b)^c = a^(b * c). Which requires carmichael fn.
                 assert_eq!(a.mul_mod(b, m).pow_mod(c, m), a.pow_mod(c, m).mul_mod(b.pow_mod(c, m), m));
+                assert_eq!(a.mul_mod_na::<LIMBS_X2>(b, m).pow_mod(c, m), a.pow_mod(c, m).mul_mod_na::<LIMBS_X2>(b.pow_mod(c, m), m));
             });
         });
     }
@@ -287,6 +298,7 @@ mod tests {
     fn test_inv() {
         const_for!(BITS in NON_ZERO {
             const LIMBS: usize = nlimbs(BITS);
+            const LIMBS_X2: usize = nlimbs(BITS * 2);
             type U = Uint<BITS, LIMBS>;
             // TODO: Increase cases when perf is better.
             let mut config = Config::default();
@@ -294,6 +306,7 @@ mod tests {
             proptest!(config, |(a: U, m: U)| {
                 if let Some(inv) = a.inv_mod(m) {
                     assert_eq!(a.mul_mod(inv, m), U::from(1));
+                    assert_eq!(a.mul_mod_na::<LIMBS_X2>(inv, m), U::from(1));
                 }
             });
         });
@@ -303,6 +316,7 @@ mod tests {
     fn test_mul_redc() {
         const_for!(BITS in NON_ZERO if (BITS >= 16) {
             const LIMBS: usize = nlimbs(BITS);
+            const LIMBS_X2: usize = nlimbs(BITS * 2);
             type U = Uint<BITS, LIMBS>;
             proptest!(|(a: U, b: U, m: U)| {
                 prop_assume!(m >= U::from(2));
@@ -315,6 +329,14 @@ mod tests {
                     // TODO: Test for larger (>= m) values of a, b.
 
                     let expected = a.mul_mod(b, m).mul_mod(r, m);
+
+                    assert_eq!(ar.mul_redc(br, m, inv), expected);
+
+                    let ar = a.mul_mod_na::<LIMBS_X2>(r, m);
+                    let br = b.mul_mod_na::<LIMBS_X2>(r, m);
+                    // TODO: Test for larger (>= m) values of a, b.
+
+                    let expected = a.mul_mod_na::<LIMBS_X2>(b, m).mul_mod_na::<LIMBS_X2>(r, m);
 
                     assert_eq!(ar.mul_redc(br, m, inv), expected);
                 }
