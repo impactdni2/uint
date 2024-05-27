@@ -16,24 +16,20 @@
     clippy::unreadable_literal,
     clippy::let_unit_value,
     clippy::option_if_let_else,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
 )]
-#![cfg_attr(
-    any(test, feature = "bench"),
-    allow(clippy::wildcard_imports, clippy::cognitive_complexity)
-)]
+#![cfg_attr(test, allow(clippy::wildcard_imports, clippy::cognitive_complexity))]
 #![cfg_attr(not(feature = "std"), no_std)]
 // Unstable features
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 #![cfg_attr(feature = "nightly", feature(core_intrinsics))]
+#![cfg_attr(feature = "nightly", allow(internal_features))]
 #![cfg_attr(
     feature = "generic_const_exprs",
     feature(generic_const_exprs),
     allow(incomplete_features)
 )]
-
-// Workaround for proc-macro `uint!` in this crate.
-// See <https://github.com/rust-lang/rust/pull/55275>
-extern crate self as ruint;
 
 #[cfg(feature = "alloc")]
 #[macro_use]
@@ -52,6 +48,7 @@ mod bytes;
 mod cmp;
 mod const_for;
 mod div;
+mod fmt;
 mod from;
 mod gcd;
 mod log;
@@ -76,13 +73,15 @@ pub use self::{
     string::ParseError,
 };
 
+// For documentation purposes we expose the macro directly, otherwise it is
+// wrapped in ./macros.rs.
+#[cfg(doc)]
 #[doc(inline)]
 pub use ruint_macro::uint;
 
+/// Extra features that are nightly only.
 #[cfg(feature = "generic_const_exprs")]
 pub mod nightly {
-    //! Extra features that are nightly only.
-
     /// Alias for `Uint` specified only by bit size.
     ///
     /// Compared to [`crate::Uint`] it compile-time computes the required number
@@ -329,6 +328,12 @@ pub const fn mask(bits: usize) -> u64 {
     } else {
         (1 << bits) - 1
     }
+}
+
+// Not public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use ruint_macro;
 }
 
 #[cfg(test)]

@@ -271,11 +271,10 @@ impl<const BITS: usize, const LIMBS: usize> Uint<BITS, LIMBS> {
 
             // Shift
             for i in (limbs..LIMBS).rev() {
+                assume!(i >= limbs && i - limbs < LIMBS);
                 self.limbs[i] = self.limbs[i - limbs];
             }
-            for i in 0..limbs {
-                self.limbs[i] = 0;
-            }
+            self.limbs[..limbs].fill(0);
             self.limbs[LIMBS - 1] &= Self::MASK;
             return (self, overflow);
         }
@@ -294,13 +293,12 @@ impl<const BITS: usize, const LIMBS: usize> Uint<BITS, LIMBS> {
 
         // Shift
         for i in (limbs + 1..LIMBS).rev() {
+            assume!(i - limbs < LIMBS && i - limbs - 1 < LIMBS);
             self.limbs[i] = self.limbs[i - limbs] << bits;
             self.limbs[i] |= self.limbs[i - limbs - 1] >> (64 - bits);
         }
         self.limbs[limbs] = self.limbs[0] << bits;
-        for i in 0..limbs {
-            self.limbs[i] = 0;
-        }
+        self.limbs[..limbs].fill(0);
         self.limbs[LIMBS - 1] &= Self::MASK;
         (self, overflow)
     }
@@ -367,28 +365,21 @@ impl<const BITS: usize, const LIMBS: usize> Uint<BITS, LIMBS> {
             for i in 0..(LIMBS - limbs) {
                 self.limbs[i] = self.limbs[i + limbs];
             }
-            for i in (LIMBS - limbs)..LIMBS {
-                self.limbs[i] = 0;
-            }
+            self.limbs[LIMBS - limbs..].fill(0);
             return (self, overflow);
         }
 
         // Check for overflow
-        let mut overflow = false;
-        for i in 0..limbs {
-            overflow |= self.limbs[i] != 0;
-        }
-        overflow |= self.limbs[limbs] >> bits != 0;
+        let overflow = self.limbs[LIMBS - limbs - 1] >> (bits - 1) & 1 != 0;
 
         // Shift
         for i in 0..(LIMBS - limbs - 1) {
+            assume!(i + limbs < LIMBS && i + limbs + 1 < LIMBS);
             self.limbs[i] = self.limbs[i + limbs] >> bits;
             self.limbs[i] |= self.limbs[i + limbs + 1] << (64 - bits);
         }
         self.limbs[LIMBS - limbs - 1] = self.limbs[LIMBS - 1] >> bits;
-        for i in (LIMBS - limbs)..LIMBS {
-            self.limbs[i] = 0;
-        }
+        self.limbs[LIMBS - limbs..].fill(0);
         (self, overflow)
     }
 
@@ -587,7 +578,7 @@ impl<const BITS: usize, const LIMBS: usize> Shr<Self> for Uint<BITS, LIMBS> {
         // on a 128-bit platform with 2.3 exabytes of memory. In this case,
         // the code produces incorrect output.
         #[allow(clippy::cast_possible_truncation)]
-        self.wrapping_shl(rhs.as_limbs()[0] as usize)
+        self.wrapping_shr(rhs.as_limbs()[0] as usize)
     }
 }
 
@@ -634,6 +625,7 @@ macro_rules! impl_shift {
             type Output = Self;
 
             #[inline(always)]
+            #[allow(clippy::cast_possible_truncation)]
             fn shl(self, rhs: $u) -> Self::Output {
                 self.wrapping_shl(rhs as usize)
             }
@@ -643,8 +635,9 @@ macro_rules! impl_shift {
             type Output = Self;
 
             #[inline(always)]
+            #[allow(clippy::cast_possible_truncation)]
             fn shr(self, rhs: $u) -> Self::Output {
-               self.wrapping_shr(rhs as usize)
+                self.wrapping_shr(rhs as usize)
             }
         }
     };
@@ -671,7 +664,6 @@ macro_rules! impl_shift {
 
     (@assign $u:ty) => {
         impl<const BITS: usize, const LIMBS: usize> ShlAssign<$u> for Uint<BITS, LIMBS> {
-            #[allow(clippy::inline_always)]
             #[inline(always)]
             fn shl_assign(&mut self, rhs: $u) {
                 *self = *self << rhs;
@@ -679,7 +671,6 @@ macro_rules! impl_shift {
         }
 
         impl<const BITS: usize, const LIMBS: usize> ShrAssign<$u> for Uint<BITS, LIMBS> {
-            #[allow(clippy::inline_always)]
             #[inline(always)]
             fn shr_assign(&mut self, rhs: $u) {
                 *self = *self >> rhs;
@@ -856,5 +847,119 @@ mod tests {
                 });
             });
         });
+    }
+
+    #[test]
+    fn test_overflowing_shr() {
+        // Test: Single limb right shift from 40u64 by 1 bit.
+        // Expects resulting integer: 20 with no fractional part.
+        assert_eq!(
+            Uint::<64, 1>::from_limbs([40u64]).overflowing_shr(1),
+            (Uint::<64, 1>::from(20), false)
+        );
+
+        // Test: Single limb right shift from 41u64 by 1 bit.
+        // Expects resulting integer: 20 with a detected fractional part.
+        assert_eq!(
+            Uint::<64, 1>::from_limbs([41u64]).overflowing_shr(1),
+            (Uint::<64, 1>::from(20), true)
+        );
+
+        // Test: Two limbs right shift from 0x0010_0000_0000_0000 and 0 by 1 bit.
+        // Expects resulting limbs: [0x0080_0000_0000_000, 0] with no fractional part.
+        assert_eq!(
+            Uint::<65, 2>::from_limbs([0x0010_0000_0000_0000, 0]).overflowing_shr(1),
+            (Uint::<65, 2>::from_limbs([0x0080_0000_0000_000, 0]), false)
+        );
+
+        // Test: Shift beyond single limb capacity with MAX value.
+        // Expects the highest possible value in 256-bit representation with a detected
+        // fractional part.
+        assert_eq!(
+            Uint::<256, 4>::MAX.overflowing_shr(65),
+            (
+                Uint::<256, 4>::from_str_radix(
+                    "7fffffffffffffffffffffffffffffffffffffffffffffff",
+                    16
+                )
+                .unwrap(),
+                true
+            )
+        );
+        // Test: Large 4096-bit integer right shift by 34 bits.
+        // Expects a specific value with no fractional part.
+        assert_eq!(
+            Uint::<4096, 64>::from_str_radix("3ffffffffffffffffffffffffffffc00000000", 16,)
+                .unwrap()
+                .overflowing_shr(34),
+            (
+                Uint::<4096, 64>::from_str_radix("fffffffffffffffffffffffffffff", 16).unwrap(),
+                false
+            )
+        );
+        // Test: Extremely large 4096-bit integer right shift by 100 bits.
+        // Expects a specific value with no fractional part.
+        assert_eq!(
+            Uint::<4096, 64>::from_str_radix(
+                "fffffffffffffffffffffffffffff0000000000000000000000000",
+                16,
+            )
+            .unwrap()
+            .overflowing_shr(100),
+            (
+                Uint::<4096, 64>::from_str_radix("fffffffffffffffffffffffffffff", 16).unwrap(),
+                false
+            )
+        );
+        // Test: Complex 4096-bit integer right shift by 1 bit.
+        // Expects a specific value with no fractional part.
+        assert_eq!(
+            Uint::<4096, 64>::from_str_radix(
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0bdbfe",
+                16,
+            )
+            .unwrap()
+            .overflowing_shr(1),
+            (
+                Uint::<4096, 64>::from_str_radix(
+                    "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffff85edff",
+                    16
+                )
+                .unwrap(),
+                false
+            )
+        );
+        // Test: Large 4096-bit integer right shift by 1000 bits.
+        // Expects a specific value with no fractional part.
+        assert_eq!(
+            Uint::<4096, 64>::from_str_radix(
+                "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                16,
+            )
+            .unwrap()
+            .overflowing_shr(1000),
+            (
+                Uint::<4096, 64>::from_str_radix(
+                    "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                    16
+                )
+                .unwrap(),
+                false
+            )
+        );
+        // Test: MAX 4096-bit integer right shift by 34 bits.
+        // Expects a specific value with a detected fractional part.
+        assert_eq!(
+            Uint::<4096, 64>::MAX
+            .overflowing_shr(34),
+            (
+                Uint::<4096, 64>::from_str_radix(
+                    "3fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                    16
+                )
+                .unwrap(),
+                true
+            )
+        );
     }
 }
